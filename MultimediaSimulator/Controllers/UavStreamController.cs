@@ -24,9 +24,9 @@ public class UavStreamController : ControllerBase
     }
 
     [HttpPost("{uavId}/stop")]
-    public IActionResult StopStream(string uavId)
+    public async Task<IActionResult> StopStream(string uavId)
     {
-        var stopped = _streamService.StopStream(uavId);
+        var stopped = await _streamService.StopStreamAsync(uavId);
         return stopped ? Ok() : NotFound();
     }
 }

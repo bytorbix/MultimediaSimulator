@@ -4,7 +4,7 @@ public interface IUavStreamService
 {
     Task StartStreamAsync(string uavId, Stream tsFile, CancellationToken cancellationToken);
 
-    bool StopStream(string uavId);
+    Task<bool> StopStreamAsync(string uavId);
 
     bool IsStreaming(string uavId);
 }
