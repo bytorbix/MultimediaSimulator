@@ -1,0 +1,6 @@
+@MultimediaSimulator_HostAddress = http://localhost:5268
+
+GET {{MultimediaSimulator_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
