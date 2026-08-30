@@ -1,0 +1,50 @@
+{
+  "info": {
+    "_postman_id": "a1c9e3f4-2b6d-4e7a-9c3e-8f1d5b2a7c4e",
+    "name": "Multimedia Simulator",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Start UAV Stream (42)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            {
+              "key": "file",
+              "type": "file",
+              "src": "/C:/Users/bytor/Nextcloud/UAVMapper Project/Datasets/QGISFMV_Samples/QGISFMV_Samples/MISB/klv_metadata_test_sync.ts"
+            }
+          ]
+        },
+        "url": {
+          "raw": "http://localhost:8083/api/uav/42/stream",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8083",
+          "path": ["api", "uav", "42", "stream"]
+        },
+        "description": "file must be MPEG-TS. Video is passed through unchanged (-c:v copy) and audio is re-encoded to AAC, so the video codec must already be one RTSP/mediamtx can carry (H264 confirmed working). Sample file was generated with ffmpeg (testsrc + sine tone, H264/AAC) and confirmed to publish successfully to mediamtx as path '42'. Stream loops indefinitely once started -- always follow up with Stop UAV Stream."
+      },
+      "response": []
+    },
+    {
+      "name": "Stop UAV Stream (42)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:8083/api/uav/42/stop",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "8083",
+          "path": ["api", "uav", "42", "stop"]
+        }
+      },
+      "response": []
+    }
+  ]
+}
