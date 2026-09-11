@@ -25,7 +25,7 @@ public class FfmpegUavStreamService : IUavStreamService
         await tsFile.CopyToAsync(fileStream, cancellationToken);
 
         string rtspUrl = $"rtsp://{_options.MediaMtxHost}:{_options.MediaMtxPort}/{uavId}";
-        string arguments = $"-stream_loop -1 -re -i \"{filePath}\" -c:v copy -c:a aac -rtsp_transport tcp -f rtsp \"{rtspUrl}\"";
+        string arguments = $"-stream_loop -1 -re -copyts -i \"{filePath}\" -c:v copy -c:a aac -rtsp_transport tcp -f rtsp \"{rtspUrl}\"";
 
         var startInfo = new ProcessStartInfo
         {
