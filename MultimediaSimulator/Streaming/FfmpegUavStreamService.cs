@@ -16,13 +16,31 @@ public class FfmpegUavStreamService : IUavStreamService
         _logger = logger;
     }
 
-    public async Task StartStreamAsync(string uavId, Stream tsFile, CancellationToken cancellationToken)
+    private string UploadPath(string uavId) => Path.Combine(_options.UploadDirectory, $"{uavId}.ts");
+
+    public async Task SaveUploadAsync(string uavId, Stream tsFile, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(_options.UploadDirectory);
-        var filePath = Path.Combine(_options.UploadDirectory, $"{uavId}.ts");
 
-        await using var fileStream = File.Create(filePath);
+        await using var fileStream = File.Create(UploadPath(uavId));
         await tsFile.CopyToAsync(fileStream, cancellationToken);
+        _logger.LogInformation("Saved upload for UAV '{UavId}' ({Bytes} bytes)", uavId, fileStream.Length);
+    }
+
+    public async Task<StartStreamResult> StartStreamAsync(string uavId, Stream tsFile, CancellationToken cancellationToken)
+    {
+        await SaveUploadAsync(uavId, tsFile, cancellationToken);
+        return StartStream(uavId);
+    }
+
+    // starts from an already uploaded file, so the call returns as soon as ffmpeg is launched
+    public StartStreamResult StartStream(string uavId)
+    {
+        var filePath = UploadPath(uavId);
+        if (!File.Exists(filePath))
+        {
+            return StartStreamResult.UploadNotFound;
+        }
 
         string rtspUrl = $"rtsp://{_options.MediaMtxHost}:{_options.MediaMtxPort}/{uavId}";
         string arguments = $"-stream_loop -1 -re -i \"{filePath}\" -c:v copy -c:a aac -rtsp_transport tcp -f rtsp \"{rtspUrl}\"";
@@ -53,11 +71,14 @@ public class FfmpegUavStreamService : IUavStreamService
 
         if (!_processes.TryAdd(uavId, process))
         {
-            throw new InvalidOperationException($"UAV '{uavId}' is already streaming.");
+            process.Dispose();
+            return StartStreamResult.AlreadyStreaming;
         }
 
         process.Start();
         process.BeginErrorReadLine();
+        _logger.LogInformation("Started stream for UAV '{UavId}' to {RtspUrl}", uavId, rtspUrl);
+        return StartStreamResult.Started;
     }
 
 
