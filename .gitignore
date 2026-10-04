@@ -364,3 +364,5 @@ FodyWeavers.xsd
 
 # Uploaded UAV .ts test files (large binaries, not source)
 MultimediaSimulator/uploads/
+# Wowza module build output (built on the Wowza host by wowza-modules/*/build.sh)
+wowza-modules/**/*.jar

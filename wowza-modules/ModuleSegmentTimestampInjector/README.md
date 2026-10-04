@@ -1,55 +1,94 @@
 # ModuleSegmentTimestampInjector
 
-Wowza Streaming Engine server-side module. Stamps a UTC-now timestamp into every
-HLS (Cupertino/TS) segment as a `timed_id3` ID3 tag, tied to the actual segment
-boundary (not a fixed interval) — for verifying frame/telemetry sync downstream.
+Wowza Streaming Engine module that stamps every HLS (Cupertino/TS) segment with the
+stream's **shared clock** time, as a `timed_id3` ID3 tag. The Data Ingestor reads that
+tag to give each video frame a UTC time and match it to telemetry.
 
-## How it works
+The clock works like the telemetry simulator's: a caller registers a `startAt` for the
+stream before publishing, and the module stamps
 
-- Hooks `IApplicationInstance.addLiveStreamPacketizerListener` on app start.
-- When a Cupertino (HLS/TS) packetizer is created for a stream, attaches an
-  `IHTTPStreamerCupertinoLivePacketizerDataHandler2`.
-- On `onFillChunkStart` (fires once per real segment), writes a `TXXX` ID3 frame
-  containing `epochMillis|ISO-8601` for "now" directly into that chunk's ID3 header.
-
-This is a Java/Wowza toolchain, independent of the .NET MultimediaSimulator build —
-nothing here is built or referenced by the main solution.
-
-## Build
-
-Compile against the target Wowza Streaming Engine's own `lib/*.jar` (matching
-its version). No build script is checked in yet; this was built ad hoc via a
-JDK container against a copy of Wowza's own libs, e.g.:
-
-```bash
-docker run --rm -v <path-to-wowza-libs>:/libs -v <this-dir>:/build \
-  eclipse-temurin:17-jdk javac -classpath '/libs/*' \
-  -d /build/out /build/src/main/java/com/multimediasimulator/wowza/ModuleSegmentTimestampInjector.java
-
-docker run --rm -v <this-dir>:/build eclipse-temurin:17-jdk \
-  jar cf /build/wowza-timestamp-module.jar -C /build/out .
+```
+segment stamp = startAt + (segment start timecode − first segment's start timecode)
 ```
 
-## Deploy
+so the first segment is exactly `startAt` and every later one is offset along the
+stream's own timeline. Network and processing delay never end up in the stamps.
 
-1. Copy the built jar to Wowza's `lib.addon/` directory (NOT `lib/` — bind-mounting
-   `lib/` directly will hide Wowza's own bundled jars and crash-loop the engine).
-2. Register the module in the target application's `Application.xml`:
+This is a Java/Wowza toolchain, independent of the .NET MultimediaSimulator build.
+
+## Files
+
+| File | Role |
+|---|---|
+| `ModuleSegmentTimestampInjector.java` | Application module. Hooks the Cupertino packetizer and writes the stamp at each segment start. Streams with no registered clock are **not** stamped (the ingestor then drops them, so a missing registration is visible). |
+| `HTTPProviderStreamClock.java` | HTTP provider for `POST /streamclock?stream={name}&startAtMs={epoch ms}`. 200 registered, 400 bad/missing params, 405 not a POST. |
+| `StreamClockRegistry.java` | Stream name → clock (`startAtMs` + baseline), shared by the provider and the module. A new POST replaces the clock, which resets the baseline. |
+
+The MultimediaSimulator sends the POST itself on `/api/uav/{uavId}/start` (see
+`Streaming:WowzaClockUrl`), then publishes at `startAt`.
+
+## Requirement: Wowza must receive the stream directly
+
+The baseline is the first segment Wowza packetizes, so that segment has to be the
+file's first frame. Publish straight to Wowza (`rtsp://<wowza>:1935/{uavId}/{uavId}.stream`).
+Pulling through a relay (MediaMTX + a `.stream` file) lets Wowza join mid-stream and
+offsets every stamp by however late it joined.
+
+## Build and install
+
+```bash
+./build.sh            # compile against the host's Wowza libs, install the jar (backs up the old one)
+./build.sh --check    # compile only
+```
+
+It copies the sources to the Wowza host, compiles them in an `eclipse-temurin:17-jdk`
+container against `/home/user/wowza/lib` (the libs of the running Wowza, currently
+4.11.3), and writes `wowza-timestamp-module.jar` there. Override the target with
+`WOWZA_HOST` / `WOWZA_DIR`. Then restart Wowza: `docker restart wowza-engine`
+(it takes ~30 s before it answers HTTP again; a restart also clears all registered clocks).
+
+On this host all of Wowza's `lib/` is bind-mounted from `/home/user/wowza/lib`, so the
+jar goes there (there is no `lib.addon/`). With a stock install, use `lib.addon/` instead
+and don't bind-mount `lib/` itself, or Wowza loses its own jars.
+
+## Wowza configuration
+
+**`conf/VHost.xml`**: register the provider inside a HostPort's `<HTTPProviders>`, before
+any catch-all `*` provider. On this host it's in the *Default Streaming* HostPort, so it
+answers on **1935**:
+
+```xml
+<HTTPProvider>
+    <BaseClass>com.multimediasimulator.wowza.HTTPProviderStreamClock</BaseClass>
+    <RequestFilters>streamclock*</RequestFilters>
+    <AuthenticationMethod>none</AuthenticationMethod>
+</HTTPProvider>
+```
+
+**`conf/{app}/Application.xml`**: register the module, and allow RTSP publishing:
 
 ```xml
 <Module>
     <Name>ModuleSegmentTimestampInjector</Name>
-    <Description>Stamps a UTC-now ID3 tag into each HLS segment</Description>
+    <Description>Stamps each HLS segment with the stream's shared clock</Description>
     <Class>com.multimediasimulator.wowza.ModuleSegmentTimestampInjector</Class>
 </Module>
 ```
 
-3. Restart/reload the application.
+Under `<RTP><Authentication>`, `<PublishMethod>none</PublishMethod>` (LAN test rig), or keep
+`digest` and give the publisher credentials.
 
 ## Verify
 
 ```bash
-ffprobe -show_streams "http://<wowza-host>:1935/live/_definst_/<stream>/chunklist_w<N>.m3u8"
+curl -i -X POST "http://<wowza>:1935/streamclock?stream=42.stream&startAtMs=1791115200000"
 ```
 
-Look for a `Data: timed_id3` stream alongside video/audio.
+After publishing, Wowza's access log shows one line per segment:
+
+```
+stamped [42.stream] chunk 1 @ <startAt> (startTimecode=…, firstVideoTimecode=…, baseline=…)
+```
+
+and `ffprobe` on a segment shows the ID3 packet at the segment's first video frame pts,
+with the value `epochMillis|ISO-8601`.

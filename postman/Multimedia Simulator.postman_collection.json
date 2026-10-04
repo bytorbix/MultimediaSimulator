@@ -6,7 +6,7 @@
   },
   "item": [
     {
-      "name": "Start UAV Stream (42)",
+      "name": "Upload UAV File (42)",
       "request": {
         "method": "POST",
         "header": [],
@@ -21,13 +21,52 @@
           ]
         },
         "url": {
-          "raw": "http://localhost:8083/api/uav/42/stream",
+          "raw": "http://localhost:8083/api/uav/42/upload",
           "protocol": "http",
-          "host": ["localhost"],
+          "host": [
+            "localhost"
+          ],
           "port": "8083",
-          "path": ["api", "uav", "42", "stream"]
+          "path": [
+            "api",
+            "uav",
+            "42",
+            "upload"
+          ]
         },
-        "description": "file must be MPEG-TS. Video is passed through unchanged (-c:v copy) and audio is re-encoded to AAC, so the video codec must already be one RTSP/mediamtx can carry (H264 confirmed working). Sample file was generated with ffmpeg (testsrc + sine tone, H264/AAC) and confirmed to publish successfully to mediamtx as path '42'. Stream loops indefinitely once started -- always follow up with Stop UAV Stream."
+        "description": "Saves the file for UAV 42, doesn't stream. File must be MPEG-TS with an H264 video track (video is passed through unchanged, audio re-encoded to AAC). 409 while that UAV is scheduled or streaming."
+      },
+      "response": []
+    },
+    {
+      "name": "Start UAV Stream (42)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"startAt\": \"2026-10-04T12:00:00Z\"\n}"
+        },
+        "url": {
+          "raw": "http://localhost:8083/api/uav/42/start",
+          "protocol": "http",
+          "host": [
+            "localhost"
+          ],
+          "port": "8083",
+          "path": [
+            "api",
+            "uav",
+            "42",
+            "start"
+          ]
+        },
+        "description": "Streams the uploaded file. startAt (optional, default now) must be now or up to 7 days ahead: it is registered with Wowza as the stream's clock origin, then streaming starts at that time. Give the telemetry simulator the same startAt. 202 scheduled, 404 nothing uploaded, 409 already scheduled/streaming, 502 Wowza didn't accept the clock. Stream loops indefinitely once started -- always follow up with Stop UAV Stream."
       },
       "response": []
     },
@@ -39,10 +78,18 @@
         "url": {
           "raw": "http://localhost:8083/api/uav/42/stop",
           "protocol": "http",
-          "host": ["localhost"],
+          "host": [
+            "localhost"
+          ],
           "port": "8083",
-          "path": ["api", "uav", "42", "stop"]
-        }
+          "path": [
+            "api",
+            "uav",
+            "42",
+            "stop"
+          ]
+        },
+        "description": "Stops the stream, or cancels it if it is still waiting for its startAt."
       },
       "response": []
     }

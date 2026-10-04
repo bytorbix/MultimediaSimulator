@@ -2,6 +2,9 @@ package com.multimediasimulator.wowza;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.util.concurrent.ConcurrentHashMap;
+
+import com.multimediasimulator.wowza.StreamClockRegistry.StreamClock;
 
 import com.wowza.wms.amf.AMFPacket;
 import com.wowza.wms.application.IApplicationInstance;
@@ -16,8 +19,11 @@ import com.wowza.wms.stream.livepacketizer.ILiveStreamPacketizer;
 import com.wowza.wms.stream.livepacketizer.LiveStreamPacketizerActionNotifyBase;
 
 /**
- * Stamps a UTC-now ID3 tag into the ID3 header of every HLS (Cupertino/TS) segment,
- * once per chunk boundary, for downstream sync verification.
+ * Stamps each HLS (Cupertino/TS) segment's ID3 header with the stream's clock time at that
+ * segment's start: startAtMs + (chunk start timecode - first chunk's start timecode).
+ * startAtMs comes from HTTPProviderStreamClock, registered before the stream is published.
+ * Streams with no registered clock are not stamped, so downstream drops them instead of
+ * silently getting wall-clock times.
  */
 public class ModuleSegmentTimestampInjector extends ModuleBase
 {
@@ -29,6 +35,10 @@ public class ModuleSegmentTimestampInjector extends ModuleBase
     {
         private final LiveStreamPacketizerCupertino packetizer;
         private final String streamName;
+
+        // the clock this packetizer last stamped with, so shutdown only removes that one
+        private StreamClock lastClock;
+        private boolean warnedNoClock;
 
         CupertinoTimestampHandler(LiveStreamPacketizerCupertino packetizer, String streamName)
         {
@@ -47,17 +57,46 @@ public class ModuleSegmentTimestampInjector extends ModuleBase
 
                 id3Frames.clear();
 
-                Instant now = Instant.now();
+                // looked up every chunk: a new POST (new clock) restarts the baseline from this chunk
+                StreamClock clock = StreamClockRegistry.get(streamName);
+                if (clock == null)
+                {
+                    if (!warnedNoClock)
+                    {
+                        getLogger().warn("ModuleSegmentTimestampInjector: no clock registered for [" + streamName + "], not stamping its segments");
+                        warnedNoClock = true;
+                    }
+                    return;
+                }
+                warnedNoClock = false;
+                lastClock = clock;
+
+                long chunkStartTimecode = chunk.getStartTimecode();
+                if (clock.baselineTimecode == null)
+                    clock.baselineTimecode = chunkStartTimecode;
+
+                long stampMs = clock.startAtMs + (chunkStartTimecode - clock.baselineTimecode);
+                Instant stamp = Instant.ofEpochMilli(stampMs);
+
                 ID3V2FrameTextInformationUserDefined frame = new ID3V2FrameTextInformationUserDefined(ID3_FRAME_DESCRIPTION);
-                frame.setValue(now.toEpochMilli() + "|" + DateTimeFormatter.ISO_INSTANT.format(now));
+                frame.setValue(stampMs + "|" + DateTimeFormatter.ISO_INSTANT.format(stamp));
                 id3Frames.putFrame(frame);
 
-                getLogger().info("ModuleSegmentTimestampInjector: stamped [" + streamName + "] chunk " + chunk.getChunkIndex() + " @ " + now);
+                getLogger().info("ModuleSegmentTimestampInjector: stamped [" + streamName + "] chunk " + chunk.getChunkIndex()
+                        + " @ " + stamp + " (startTimecode=" + chunkStartTimecode
+                        + ", firstVideoTimecode=" + chunk.getFirstVideoTimecode()
+                        + ", baseline=" + clock.baselineTimecode + ")");
             }
             catch (Exception e)
             {
                 getLogger().error("ModuleSegmentTimestampInjector: failed to inject ID3 timestamp for [" + streamName + "]", e);
             }
+        }
+
+        void release()
+        {
+            if (lastClock != null)
+                StreamClockRegistry.remove(streamName, lastClock);
         }
 
         @Override
@@ -82,13 +121,29 @@ public class ModuleSegmentTimestampInjector extends ModuleBase
 
     class LiveStreamPacketizerListener extends LiveStreamPacketizerActionNotifyBase
     {
+        // destroy isn't given the stream name, so keep each packetizer's handler to release its clock
+        private final ConcurrentHashMap<ILiveStreamPacketizer, CupertinoTimestampHandler> handlers = new ConcurrentHashMap<>();
+
         @Override
         public void onLiveStreamPacketizerCreate(ILiveStreamPacketizer packetizer, String streamName)
         {
             if (packetizer instanceof LiveStreamPacketizerCupertino cupertino)
             {
-                cupertino.setDataHandler(new CupertinoTimestampHandler(cupertino, streamName));
+                CupertinoTimestampHandler handler = new CupertinoTimestampHandler(cupertino, streamName);
+                cupertino.setDataHandler(handler);
+                handlers.put(packetizer, handler);
                 getLogger().info("ModuleSegmentTimestampInjector: attached to Cupertino packetizer for [" + streamName + "]");
+            }
+        }
+
+        @Override
+        public void onLiveStreamPacketizerDestroy(ILiveStreamPacketizer packetizer)
+        {
+            CupertinoTimestampHandler handler = handlers.remove(packetizer);
+            if (handler != null)
+            {
+                handler.release();
+                getLogger().info("ModuleSegmentTimestampInjector: released clock for [" + handler.streamName + "]");
             }
         }
     }
