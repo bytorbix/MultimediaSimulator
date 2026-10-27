@@ -27,6 +27,8 @@ public class UavStreamController : ControllerBase
     // saves the file only; streaming is started separately with /start
     [HttpPost("{uavId}/upload")]
     [RequestSizeLimit(long.MaxValue)]
+    // the form reader has its own 128 MB default; flight videos are often bigger
+    [RequestFormLimits(MultipartBodyLengthLimit = long.MaxValue)]
     public async Task<IActionResult> Upload(string uavId, IFormFile file, CancellationToken cancellationToken)
     {
         if (_streamService.IsStreaming(uavId))
